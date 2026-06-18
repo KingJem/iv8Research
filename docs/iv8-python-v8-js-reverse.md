@@ -216,12 +216,3 @@ iv8 的价值在于**把浏览器 JS 执行这一环节单独抽出来**，用 P
 对于逆向爱好者来说，iv8 提供了一种比 jsdom 补环境更稳定、比 CDP 更轻量的方案。如果你经常面对 Akamai、瑞数、Cloudflare 或者各种自定义 JS 签名，iv8 值得一试。
 
 
-
-
-
-参考这个 刷新cookie 的方式spiders/chewy/chewy_get_session_cloakbrowser.py,spiders/chewy/chewy_get_session_proxy.py 和  spiders/chewy/chewy_keyword_search_spider.py 
-
-1. 使用cloakbrowser 访问主页,得到cookie, 同时使用 172.121 段的代理,headers,proxy,and cookie save to redis ,  cloakbrowser 版本是chrome 146
-2. 在搜索的时候使用 curl_cffi chrome 146 和从redis 得到的cookie,
-3. 新建两个文件 chewy_get_session_v2 和 chewy_keyword_search_spider_v2 
-4. 一定要注意,保持header, IP  和TLS 指纹的一致性

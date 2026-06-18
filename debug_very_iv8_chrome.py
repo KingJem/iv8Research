@@ -22,14 +22,14 @@ def main():
     html = inject_cookies(page.text, cookies)
 
     with iv8.JSContext(
-        mode="debug",
-        environment=chrome_environment(cookies),
-        config={
-            "time": {"mode": "system"},
-            "features": {"profile": "chrome124_win"},
-        },
-        ignore_apis=[],
-        time_mode="system",
+            mode="debug",
+            environment=chrome_environment(cookies),
+            config={
+                "time": {"mode": "system"},
+                "features": {"profile": "chrome124_win"},
+            },
+            ignore_apis=[],
+            time_mode="system",
     ) as ctx:
         print("monitor mode:", ctx.get_browser_api_monitor_mode())
         ctx.expose({"baseURL": PAGE_URL, "html": html, "resources": resources}, "s1")
