@@ -127,14 +127,28 @@ def main():
     session = requests.Session(impersonate="chrome146")
     page = session.get(PAGE_URL, headers=DOCUMENT_HEADERS, timeout=45)
     print("initial", page.status_code, len(page.text), "_abck", abck_status(session))
+
+
+
     resources = fetch_scripts(session, page.text)
     cookies = session.cookies.get_dict()
     html = inject_head_chrome(inject_cookies(page.text, cookies))
 
     with iv8.JSContext(
-        environment=chrome_environment(cookies),
-        config={"time": {"mode": "system"}, "features": {"profile": "chrome124_win"}},
-        time_mode="system",
+            environment=chrome_environment(cookies),
+            config={"time": {"mode": "system"}, "features": {"profile": "chrome124_win"}},
+            time_mode="system", mode='debug'
+    ).with_devtools(
+        port=9229,
+
+        # watch_apis: 访问这些 API 时自动触发断点，无需在 JS 里写 vdebugger
+        # 在 DevTools 调用栈面板可看到是哪行代码触发了本次访问
+        watch_apis=[
+            # "navigator.userAgent",
+            # "navigator.webdriver",
+            # "document.cookie",
+            "window.chrome",
+        ],
     ) as ctx:
         ctx.expose(
             {"baseURL": PAGE_URL, "html": html, "resources": resources, "headers": dict(page.headers)},
@@ -164,7 +178,8 @@ def main():
         size = len(final_page.text)
         has_water = "water" in final_page.text.lower()
         has_challenge = "sec-if-cpt" in final_page.text.lower()
-        print(f"final {attempt} {final_page.status_code} size={size} water={has_water} challenge={has_challenge} _abck={abck_status(session)}")
+        print(
+            f"final {attempt} {final_page.status_code} size={size} water={has_water} challenge={has_challenge} _abck={abck_status(session)}")
         if size > 100000 and not has_challenge:
             with open("very_water_search_iv8.html", "w", encoding="utf-8") as f:
                 f.write(final_page.text)

@@ -6,20 +6,24 @@ from urllib.parse import urljoin
 import iv8
 from curl_cffi import requests
 
-
-PAGE_URL = "https://www.very.co.uk/search/water.end"
+PAGE_URL = "https://www.very.co.uk/search/water"
 BASE_URL = "https://www.very.co.uk"
+# 与 iv8 profile=chrome124_win 实际输出对齐:其 userAgentData.brands 报告 v125,
+# 故把 UA(进而 navigator.userAgent / appVersion / user-agent 头)统一为 Chrome/125,
+# 消除 UA=124 与 brands=125 的版本不一致。(profile 名义为 chrome124,但 brands 实为 125。)
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
+# sec-ch-ua 必须等于 navigator.userAgentData.brands 的序列化(profile 输出 v125 + Not.A/Brand;v24)。
+SEC_CH_UA = '"Chromium";v="125", "Google Chrome";v="125", "Not.A/Brand";v="24"'
 
 DOCUMENT_HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
     "cache-control": "max-age=0",
     "priority": "u=0, i",
-    "sec-ch-ua": '"Google Chrome";v="146", "Chromium";v="146", "Not_A Brand";v="99"',
+    "sec-ch-ua": SEC_CH_UA,
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "document",
@@ -58,6 +62,29 @@ XHR_HEADERS = {
     "content-type": "text/plain;charset=UTF-8",
 }
 
+# Akamai bmak pixel(/akam/<ver>/<id>)= 遥测,body 是 form-urlencoded。
+# 注意:这不是 very 验证 _abck 的那一发,真正的 sensor_data POST 走下面的混淆动态路径。
+AKAM_PIXEL_HEADERS = {
+    **{k: v for k, v in XHR_HEADERS.items() if k != "content-type"},
+    "content-type": "application/x-www-form-urlencoded",
+}
+AKAM_PIXEL_RE = re.compile(r"/akam/\d+/[A-Za-z0-9_]+")
+
+
+def classify_request(method, url, body):
+    """区分 very 的三类回传请求(真正验证 _abck 的是 'sensor')。"""
+    if "/akam/" in url and AKAM_PIXEL_RE.search(url):
+        return "akam-pixel"            # bmak 遥测,form-urlencoded
+    if method == "GET" and "/_bm/get_params" in url:
+        return "bm-get-params"
+    if method == "POST" and body:
+        b = body.lstrip()
+        # v3 sensor_data:混淆随机路径(无 ?v=)、body 为 {...} JSON 或含 sensor_data → 这就是关键的那一发
+        if "sensor_data" in body or b.startswith("{") or b.startswith("["):
+            return "sensor"
+        return "post"
+    return "other"
+
 
 def chrome_environment(cookies):
     return {
@@ -66,7 +93,7 @@ def chrome_environment(cookies):
             "hostname": "www.very.co.uk",
             "host": "www.very.co.uk",
             "port": "",
-            "pathname": "/search/water.end",
+            "pathname": "/search/water",
             "href": PAGE_URL,
             "search": "",
             "hash": "",
@@ -307,20 +334,30 @@ def chrome_environment(cookies):
                 "defaultMdnsHostname": "",
             },
         },
+        # "chrome": {
+        #     "app": {
+        #         "isInstalled": False,
+        #         "InstallState": {
+        #             "DISABLED": "disabled",
+        #             "INSTALLED": "installed",
+        #             "NOT_INSTALLED": "not_installed",
+        #         },
+        #         "RunningState": {
+        #             "CANNOT_RUN": "cannot_run",
+        #             "READY_TO_RUN": "ready_to_run",
+        #             "RUNNING": "running",
+        #         },
+        #     },
+        #     "loadTimes": {
+        #         "navigationType": "Other",
+        #         "npnNegotiatedProtocol": "h2",
+        #         "connectionInfo": "h2",
+        #         "wasFetchedViaSpdy": True,
+        #         "wasNpnNegotiated": True,
+        #         "wasAlternateProtocolAvailable": False,
+        #     },
+        # },
         "chrome": {
-            "app": {
-                "isInstalled": False,
-                "InstallState": {
-                    "DISABLED": "disabled",
-                    "INSTALLED": "installed",
-                    "NOT_INSTALLED": "not_installed",
-                },
-                "RunningState": {
-                    "CANNOT_RUN": "cannot_run",
-                    "READY_TO_RUN": "ready_to_run",
-                    "RUNNING": "running",
-                },
-            },
             "loadTimes": {
                 "navigationType": "Other",
                 "npnNegotiatedProtocol": "h2",
@@ -344,35 +381,95 @@ def inject_cookies(html, cookies):
     return re.sub(r"(<body\b[^>]*>)", r"\1" + snippet, html, count=1, flags=re.I)
 
 
+# page.load 里脚本是异步执行的,内部报错不会冒泡成 Python 异常 → 在 JS 侧全局捕获。
+# (真实 Error 会被 iv8 映射成 Python 内建异常且不带栈;iv8.JSError 只在 throw 非 Error 时出现且无栈,
+#  故不能用 except iv8.JSError.frames,只能靠这里捕获 e.stack 再交给 JSError.parse_stack。)
+ERROR_CAPTURE_JS = r"""
+window.__iv8_errors__ = [];
+window.addEventListener('error', function(ev){
+  var e = ev && ev.error;
+  window.__iv8_errors__.push({
+    message: (e && e.name ? e.name + ': ' + e.message : (ev && ev.message)),
+    stack: (e && e.stack) ? e.stack : ''
+  });
+});
+window.addEventListener('unhandledrejection', function(ev){
+  var r = ev && ev.reason;
+  window.__iv8_errors__.push({
+    message: 'UnhandledRejection: ' + String(r && r.message || r),
+    stack: (r && r.stack) ? r.stack : ''
+  });
+});
+"""
+
+
+def dump_js_errors(ctx, label=""):
+    """读取 JS 侧捕获的错误,用 iv8.JSError.parse_stack 打印栈帧。"""
+    raw = ctx.eval("JSON.stringify(window.__iv8_errors__ || [])", to_py=True)
+    errors = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    if not errors:
+        return
+    print(f"[JS-ERRORS{(' ' + label) if label else ''}] 捕获 {len(errors)} 条:")
+    for i, e in enumerate(errors):
+        print(f"  ({i}) {e.get('message')}")
+        for func, file, row, col in iv8.JSError.parse_stack(e.get("stack") or ""):
+            print(f"        at {func or '<anonymous>'} ({file}:{row}:{col})")
+
+
 def run_iv8(html, resources, cookies, mocked_resources=None):
     html = inject_cookies(html, cookies)
     with iv8.JSContext(
-        environment=chrome_environment(cookies),
-        config={"time": {"mode": "system"}, "features": {"profile": "chrome124_win"}},
-        time_mode="system",
+            environment=chrome_environment(cookies),
+            config={"time": {"mode": "system"}, "features": {"profile": "chrome124_win"}},
+            time_mode="system",
     ) as ctx:
+        ctx.eval(ERROR_CAPTURE_JS)  # 必须在 page.load 之前装
         for url, body in (mocked_resources or {}).items():
             ctx.add_resource(url, body, 200, {"content-type": "application/json"})
         ctx.expose({"baseURL": PAGE_URL, "html": html, "resources": resources}, "s1")
         ctx.eval("window.__iv8__.page.load(window.__iv8__.data.s1)")
-        print("chrome:", ctx.eval("JSON.stringify(window.chrome)", to_py=True))
         for ms in [100, 500, 1000, 3000, 5000, 10000, 15000]:
             ctx.eval(f"window.__iv8__.eventLoop.advance({ms})")
+        dump_js_errors(ctx)
         return json.loads(ctx.eval("JSON.stringify(window.__iv8__.netLog.entries)", to_py=True))
+
+
+# 只匹配 Akamai sensor 脚本:相对路径、无 .js/.mjs/资源扩展名的混淆路径。
+# very 的 app 模块(/sa/global-assets-fe/*.js 等)是异步/worker 加载,sensor 流程不需要,跳过以免一直下载。
+_ASSET_EXT_RE = re.compile(r"\.(?:js|mjs|css|json|woff2?|ttf|png|jpe?g|svg|gif|ico|map)$", re.I)
+
+
+def is_akamai_sensor_src(src):
+    if src.startswith("http") or src.startswith("//"):
+        return False  # 只要同源相对路径
+    path = src.split("?", 1)[0].rstrip("/")
+    if _ASSET_EXT_RE.search(path):
+        return False  # 带 .js 等扩展名的都是 app 资源,不是 sensor
+    return path.count("/") >= 1 and len(path) >= 12  # 混淆路径有一定长度
 
 
 def fetch_scripts(session, html):
     resources = {}
-    scripts = re.findall(r"<script[^>]+src=[\"']([^\"']+)", html, re.I)
-    for src in scripts:
+    all_srcs = re.findall(r"<script[^>]+src=[\"']([^\"']+)", html, re.I)
+    sensor_srcs = [s for s in all_srcs if is_akamai_sensor_src(s)]
+    skipped = [s for s in all_srcs if s not in sensor_srcs]
+    print(f"fetch_scripts: 命中 sensor {len(sensor_srcs)} 个 / 跳过 {len(skipped)} 个 app 脚本")
+    for s in skipped:
+        print("  skip", s.split("?")[0][:80])
+    for src in sensor_srcs:
         url = urljoin(PAGE_URL, src.replace("&amp;", "&"))
         response = session.get(url, headers=SCRIPT_HEADERS, timeout=45)
-        print("script", response.status_code, len(response.text), url.split("?")[0])
+        print("  sensor", response.status_code, len(response.text), url.split("?")[0])
         if response.status_code == 200:
             resources[url] = response.text
             resources[src] = response.text
             resources[src.replace("&amp;", "&")] = response.text
     return resources
+
+
+def _abck_state(session):
+    abck = session.cookies.get_dict().get("_abck", "")
+    return "~0~" if "~0~" in abck else ("~-1~" if "~-1~" in abck else "?")
 
 
 def replay_entries(session, entries):
@@ -382,20 +479,29 @@ def replay_entries(session, entries):
         body = entry.get("body", "")
         if not url.startswith(BASE_URL):
             continue
-        if method == "GET" and "/_bm/get_params" in url:
+        kind = classify_request(method, url, body)
+        if kind == "sensor":
+            # very 关键:v3 sensor_data POST(混淆动态路径),text/plain 回传
+            response = session.post(url, headers=XHR_HEADERS, data=body, timeout=45)
+            print("replay SENSOR", response.status_code, len(response.text), url[len(BASE_URL):][:60],
+                  "| body", len(body), "| _abck", _abck_state(session))
+        elif kind == "akam-pixel":
+            response = session.post(url, headers=AKAM_PIXEL_HEADERS, data=body, timeout=45)
+            print("replay AKAM-PIXEL", response.status_code, len(response.text), url.split("?")[0])
+        elif kind == "bm-get-params":
             response = session.get(
                 url,
                 headers={k: v for k, v in XHR_HEADERS.items() if k != "content-type"},
                 timeout=45,
             )
             print("replay GET", response.status_code, len(response.text), response.text[:100])
-        elif method == "POST" and body:
+        elif kind == "post":
             response = session.post(url, headers=XHR_HEADERS, data=body, timeout=45)
             print("replay POST", response.status_code, len(response.text), url.split("?")[0])
 
 
 def main():
-    session = requests.Session(impersonate="chrome146")
+    session = requests.Session(impersonate="chrome124")
     page = session.get(PAGE_URL, headers=DOCUMENT_HEADERS, timeout=45)
     print("initial", page.status_code, len(page.text), sorted(session.cookies.get_dict()))
     resources = fetch_scripts(session, page.text)
@@ -417,6 +523,15 @@ def main():
 
     second_entries = run_iv8(page.text, resources, session.cookies.get_dict(), mocked)
     print("second netlog", [(e.get("method"), e.get("url", "")[:90], len(e.get("body", ""))) for e in second_entries])
+    sensor_hits = [e for e in second_entries
+                   if e.get("url", "").startswith(BASE_URL)
+                   and classify_request(e.get("method"), e.get("url", ""), e.get("body", "")) == "sensor"]
+    if sensor_hits:
+        print(f"[SENSOR] netLog 捕获到 {len(sensor_hits)} 个 v3 sensor_data POST:",
+              [e["url"][len(BASE_URL):][:60] for e in sensor_hits])
+    else:
+        print("[SENSOR] ⚠️ netLog 未捕获到 sensor_data POST —— iv8 未生成关键请求,无可回传"
+              "(需排查 sensor 脚本是否进 resources 并被执行)")
     replay_entries(session, second_entries)
     print("cookies after replay", sorted(session.cookies.get_dict()))
 
