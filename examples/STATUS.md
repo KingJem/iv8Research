@@ -17,7 +17,7 @@
 | `argos.py` | argos.co.uk | Akamai | ✅ 通过 | httpcloak 直连 → 200 / 513KB 真实页 + `_abck` |
 | `chewy.py` | chewy.com | Kasada | ⚠️ 部分 | iv8 0.1.4 成功执行 ips.js 产出 `/tl` 负载 + `KP_UIDz-ssn`（核心通过）；但重试仍 429（Kasada 多轮/IP）。含 `DataTransfer.files` shim 修复 iv8 0.1.4 teardown 崩溃 |
 | `very.py` | very.co.uk | Akamai v3 | ⚠️ 受 IP 阻 | iv8 0.1.4 能生成 sensor_data POST（接受 200），但所有数据中心 IP（含 172.121 全段）被 `403 Access Denied` 硬封，`_abck` 停 `~-1~`；干净 IP 直连即出真实页。详见根目录 `retry_very_iv8_chrome.py` |
-| `samsclub_px_example.py` | samsclub.com | PerimeterX | ✅ 通过（需 PX-clean IP） | 独立示例（脱 spiders_2 框架）：iv8 铸 `_px3`/`_pxvid`/`pxcts`/`_pxde` + 调 `products/search` 接口。本地/服务器已确认出值；token 质量取决于**铸造时采集 IP 信誉**——干净/住宅 IP 200 出值，中国 dev IP / 数据中心段（172.121）铸的 token 搜索接口 412。含 `px_init.js`（PX sensor，缺失自动下） |
+| `samsclub_px_example.py` | samsclub.com | PerimeterX | ✅ 通过 | 独立示例（脱 spiders_2 框架，请求库用 **httpcloak** 非 curl_cffi）：iv8 铸 `_px3`/`_pxvid`/`pxcts`/`_pxde` + 调 `products/search`。**实测本机中国直连、无代理 → HTTP 200 / 11 条商品**（httpcloak `chrome-146-windows` 指纹比 curl_cffi 更真，PX 评分更高；curl_cffi 版曾 412）。`px_init.js`（PX sensor）运行时自下缓存，不入库 |
 | `bjs.py` | bjs.com | Akamai v3 | ❌ 不通过 | iv8 生成的 v3 sensor 无效，`_abck` 始终 `~-1~`，页面仍挑战 |
 | `lowes_product.py` / `lowes_search.py` | lowes.com | Akamai | ❌ 不通过 | iv8 跑完仍返回 ~2.5KB 挑战页 / teardown 崩溃（CN IP） |
 | `ebay.py` | ebay.com | Akamai | ❌ 不通过 | 初始 403（CN IP） |
