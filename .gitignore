@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
 *.log
-.idea
+.idea/
+examples/px_init.js
