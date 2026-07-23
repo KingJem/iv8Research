@@ -13,7 +13,7 @@
 
 | 脚本 | 站点 | 防护 | 状态 | 说明 |
 |---|---|---|---|---|
-| `cvs.py` / `cvs_2.py` / `cvs_home.py` | cvs.com | Akamai | ✅ 通过 | httpcloak `chrome-146` 指纹直连即出真实页（3.9MB/14MB）+ 全套 Akamai cookie；无需 iv8 sensor |
+| `cvs.py` / `cvs_2.py` / `cvs_home.py` | cvs.com | Akamai | ✅ 通过 | **最省**：见下「CVS 特性」——**无需代理、不挑地区**，指纹对即出真实页 |
 | `argos.py` | argos.co.uk | Akamai | ✅ 通过 | httpcloak 直连 → 200 / 513KB 真实页 + `_abck` |
 | `chewy.py` | chewy.com | Kasada | ⚠️ 部分 | iv8 0.1.4 成功执行 ips.js 产出 `/tl` 负载 + `KP_UIDz-ssn`（核心通过）；但重试仍 429（Kasada 多轮/IP）。含 `DataTransfer.files` shim 修复 iv8 0.1.4 teardown 崩溃 |
 | `very.py` | very.co.uk | Akamai v3 | ⚠️ 受 IP 阻 | iv8 0.1.4 能生成 sensor_data POST（接受 200），但所有数据中心 IP（含 172.121 全段）被 `403 Access Denied` 硬封，`_abck` 停 `~-1~`；干净 IP 直连即出真实页。详见根目录 `retry_very_iv8_chrome.py` |
@@ -26,6 +26,16 @@
 | `yaojianju.py` | nmpa.gov.cn | 参数签名 | ⏭ 未测 | 中国站点变体（`browserforge` 依赖报错），参见上游 `药监局.py` |
 
 图例：✅ 通过 · ⚠️ 部分/受环境阻 · ❌ 不通过 · ⏭ 未测
+
+## CVS 特性（所有站点里最省）
+
+CVS 是本批里唯一「**指纹对 = 访问即得**」的站点，实测 2026-07-23：
+
+- **不需要 iv8**：`httpcloak` 的 `chrome-146` TLS 指纹直接 GET 即返回真实页 + 全套 Akamai cookie（`_abck`/`bm_s`/`bm_so`/`bm_ss`/`bm_sz`），完全用不到 sensor/补环境那套。
+- **不需要代理、不挑出口地区**：本机**中国直连（无代理）** = `200 / 22MB 真实页`；美国代理 = `200 / 9.4MB`，两者都出值。这与 very 正好相反（very 对数据中心/异地 IP 一律 `403 Access Denied`）。
+- **`_abck` 停在 `~-1~` 也正常**：判断成功看页面是否真实内容（几 MB、含 CVS/商品），不看状态位。
+- **cookie 有效期瓶颈**：`bm_ss≈1h`、`bm_sz≈4h`（`_abck` 名义 1 年是假象）——采到后 1 小时内用掉最稳，过期就重新 GET 一份。
+- **唯一前提**：客户端得能伪造 Chrome TLS/JA3 指纹（`httpcloak` 或 `curl_cffi impersonate`）；普通 `requests`/原生 `curl` 指纹不对会被挡。
 
 ## iv8 0.1.4 通用补丁（本轮踩坑）
 
