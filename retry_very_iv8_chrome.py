@@ -8,15 +8,15 @@ from curl_cffi import requests
 
 PAGE_URL = "https://www.very.co.uk/search/water"
 BASE_URL = "https://www.very.co.uk"
-# 与 iv8 profile=chrome124_win 实际输出对齐:其 userAgentData.brands 报告 v125,
-# 故把 UA(进而 navigator.userAgent / appVersion / user-agent 头)统一为 Chrome/125,
-# 消除 UA=124 与 brands=125 的版本不一致。(profile 名义为 chrome124,但 brands 实为 125。)
+# 与 iv8 0.1.4 的 profile=chrome124_win 对齐:0.1.4 修复了旧版 UA=124/brands=125 的不一致,
+# 现在 navigator.userAgent 与 userAgentData.brands 都是干净的 Chrome/124。
+# (0.1.2 时 brands 曾误报 v125+Not.A/Brand;v24,那套 125 对齐在 0.1.4 下反而不匹配,已回退到 124。)
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-# sec-ch-ua 必须等于 navigator.userAgentData.brands 的序列化(profile 输出 v125 + Not.A/Brand;v24)。
-SEC_CH_UA = '"Chromium";v="125", "Google Chrome";v="125", "Not.A/Brand";v="24"'
+# sec-ch-ua 必须等于 navigator.userAgentData.brands 的序列化(0.1.4 输出 v124 + Not-A.Brand;v99)。
+SEC_CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
 
 DOCUMENT_HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -381,6 +381,26 @@ def inject_cookies(html, cookies):
     return re.sub(r"(<body\b[^>]*>)", r"\1" + snippet, html, count=1, flags=re.I)
 
 
+# iv8 0.1.4 把 document.readyState 钉死为 "complete"(环境层改不动)。页面 <head> 脚本在 body 尚未
+# 解析时,若按 `if(body){} else if(readyState==='loading'){defer} else {body.classList...}` 分支,
+# 会掉进 else 访问 null.body 崩溃(very 挑战/拦截页都有这段加 hostname-class 的脚本)。
+# 注入 shim:body 未出现时 readyState 返回 'loading'(真实浏览器此刻的值),脚本改走 DOMContentLoaded
+# 延迟分支;body 出现后仍返回 'complete',不影响 Akamai 的后置 readyState 检查。
+READYSTATE_SHIM = (
+    "<script>(function(){try{Object.defineProperty(document,'readyState',"
+    "{configurable:true,get:function(){return document.body?'complete':'loading';}});}catch(e){}})();</script>"
+)
+
+
+def inject_readystate_shim(html):
+    """把 shim 插到尽量靠前:<head> 后 → <html> 后 → 文档最前(必须先于页面自身脚本运行)。"""
+    for pat in (r"(<head\b[^>]*>)", r"(<html\b[^>]*>)"):
+        new, n = re.subn(pat, r"\1" + READYSTATE_SHIM, html, count=1, flags=re.I)
+        if n:
+            return new
+    return READYSTATE_SHIM + html
+
+
 # page.load 里脚本是异步执行的,内部报错不会冒泡成 Python 异常 → 在 JS 侧全局捕获。
 # (真实 Error 会被 iv8 映射成 Python 内建异常且不带栈;iv8.JSError 只在 throw 非 Error 时出现且无栈,
 #  故不能用 except iv8.JSError.frames,只能靠这里捕获 e.stack 再交给 JSError.parse_stack。)
@@ -417,6 +437,7 @@ def dump_js_errors(ctx, label=""):
 
 
 def run_iv8(html, resources, cookies, mocked_resources=None):
+    html = inject_readystate_shim(html)  # 必须在页面自身脚本前生效,先注入
     html = inject_cookies(html, cookies)
     with iv8.JSContext(
             environment=chrome_environment(cookies),
